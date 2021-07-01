@@ -99,7 +99,7 @@ type Addon struct {
 }
 
 func (p Prune) IsEmpty() bool {
-	if len(p.Resources)==0 || p.Schedule==""{
+	if len(p.Resources) == 0 || p.Schedule == "" {
 		return true
 	}
 	return false
