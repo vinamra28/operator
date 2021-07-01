@@ -97,10 +97,3 @@ type Addon struct {
 	// +optional
 	Params []Param `json:"params,omitempty"`
 }
-
-func (p Prune) IsEmpty() bool {
-	if len(p.Resources) == 0 || p.Schedule == "" {
-		return true
-	}
-	return false
-}
