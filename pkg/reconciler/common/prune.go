@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 
 	"github.com/tektoncd/operator/pkg/apis/operator/v1alpha1"
@@ -32,8 +33,6 @@ import (
 )
 
 const (
-	openshiftPrefix  = "openshift"
-	kubePrefix       = "kube"
 	tektonSA         = "tekton-pipelines-controller"
 	CronName         = "resource-pruner"
 	JobsTKNImageName = "IMAGE_JOB_PRUNER_TKN"
@@ -42,29 +41,33 @@ const (
 )
 
 func Prune(k kubernetes.Interface, ctx context.Context, tC *v1alpha1.TektonConfig) error {
-	if 0 < len(tC.Spec.Pruner.Resources) {
-		tknImage := os.Getenv(JobsTKNImageName)
-		if tknImage == "" {
-			return fmt.Errorf("%s environment variable not found", JobsTKNImageName)
-		}
-		pru := tC.Spec.Pruner
-		logger := logging.FromContext(ctx)
-		ownerRef := v1.OwnerReference{
-			APIVersion: ownerAPIVer,
-			Kind:       ownerKind,
-			Name:       tC.Name,
-			UID:        tC.ObjectMeta.UID,
-		}
 
-		pruningNamespaces, err := GetPrunableNamespaces(k, ctx)
-		if err != nil {
-			return err
-		}
-		if err := createCronJob(k, ctx, pru, tC.Spec.TargetNamespace, pruningNamespaces, ownerRef, tknImage); err != nil {
-			logger.Error("failed to create cronjob ", err)
-
-		}
+	if len(tC.Spec.Pruner.Resources) == 0 || tC.Spec.Pruner.Schedule == "" {
+		return checkAndDelete(k, ctx, tC.Spec.TargetNamespace)
 	}
+
+	tknImage := os.Getenv(JobsTKNImageName)
+	if tknImage == "" {
+		return fmt.Errorf("%s environment variable not found", JobsTKNImageName)
+	}
+	pru := tC.Spec.Pruner
+	logger := logging.FromContext(ctx)
+	ownerRef := v1.OwnerReference{
+		APIVersion: ownerAPIVer,
+		Kind:       ownerKind,
+		Name:       tC.Name,
+		UID:        tC.ObjectMeta.UID,
+	}
+
+	pruningNamespaces, err := GetPrunableNamespaces(k, ctx)
+	if err != nil {
+		return err
+	}
+	if err := createCronJob(k, ctx, pru, tC.Spec.TargetNamespace, pruningNamespaces, ownerRef, tknImage); err != nil {
+		logger.Error("failed to create cronjob ", err)
+
+	}
+
 	return nil
 }
 
@@ -75,10 +78,12 @@ func GetPrunableNamespaces(k kubernetes.Interface, ctx context.Context) ([]strin
 	}
 
 	var allNameSpaces []string
+	re := regexp.MustCompile(NamespaceIgnorePattern)
 	for _, ns := range nsList.Items {
-		if !strings.HasPrefix(ns.Name, openshiftPrefix) && !strings.HasPrefix(ns.Name, kubePrefix) {
-			allNameSpaces = append(allNameSpaces, ns.Name)
+		if ignore := re.MatchString(ns.GetName()); ignore {
+			continue
 		}
+		allNameSpaces = append(allNameSpaces, ns.Name)
 	}
 	return allNameSpaces, nil
 }
@@ -132,9 +137,9 @@ func getPruningContainers(resources, namespaces []string, keep int, tknImage str
 	containers := []corev1.Container{}
 	for _, ns := range namespaces {
 		cmdArgs := deleteCommand(resources, keep, ns)
-		cName := "pruner-tkn-" + ns
+		jobName := SimpleNameGenerator.RestrictLengthWithRandomSuffix("pruner-tkn-" + ns)
 		container := corev1.Container{
-			Name:                     cName,
+			Name:                     jobName,
 			Image:                    tknImage,
 			Command:                  []string{"/bin/sh", "-c"},
 			Args:                     cmdArgs,
@@ -153,4 +158,17 @@ func deleteCommand(resources []string, keep int, ns string) []string {
 		cmdArgs = append(cmdArgs, cmd)
 	}
 	return cmdArgs
+}
+
+func checkAndDelete(k kubernetes.Interface, ctx context.Context, targetNamespace string) error {
+	if _, err := k.BatchV1beta1().CronJobs(targetNamespace).Get(ctx, CronName, v1.GetOptions{}); err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			return nil
+		} else {
+			return err
+		}
+	}
+
+	//if there is no error it means cron is exists, but no prune in config it means delete it
+	return k.BatchV1beta1().CronJobs(targetNamespace).Delete(ctx, CronName, v1.DeleteOptions{})
 }

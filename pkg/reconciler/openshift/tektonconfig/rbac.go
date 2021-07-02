@@ -18,6 +18,7 @@ package tektonconfig
 
 import (
 	"context"
+	"github.com/tektoncd/operator/pkg/reconciler/common"
 	"regexp"
 
 	corev1 "k8s.io/api/core/v1"
@@ -39,7 +40,6 @@ const (
 	pipelineSA               = "pipeline"
 	serviceCABundleConfigMap = "config-service-cabundle"
 	trustedCABundleConfigMap = "config-trusted-cabundle"
-	namespaceIgnorePattern   = "^(openshift|kube)-"
 	clusterInterceptors      = "openshift-pipelines-clusterinterceptors"
 )
 
@@ -66,7 +66,7 @@ func (r *rbac) createResources(ctx context.Context) error {
 		return err
 	}
 
-	re := regexp.MustCompile(namespaceIgnorePattern)
+	re := regexp.MustCompile(common.NamespaceIgnorePattern)
 
 	for _, n := range namespaces.Items {
 
